@@ -9,10 +9,10 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { clerkAuth } from './middlewares/clerkAuth.js';
+
 
 import apiRouter from './routes/index.js';
-
-import { clerkAuthMiddleware } from './middlewares/clerkAuth.js'; // Import middleware
 
 
 
@@ -24,6 +24,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(clerkAuth);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -32,7 +33,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // Example: Protect all /api/docs routes
 // app.use('/api/docs', clerkAuthMiddleware, apiRouter.docs);
 // Or protect whole api namespace:
-app.use('/api', clerkAuthMiddleware, apiRouter);
+app.use('/api', apiRouter);
 
 // app.use('/api', apiRouter);
 

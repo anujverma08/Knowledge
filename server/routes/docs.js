@@ -9,31 +9,48 @@ import Document from '../models/Document.js';
 import DocumentChunk from '../models/DocumentChunk.js';
 import { parseFileByExtension } from '../utils/documentProcessing.js';
 import { getEmbedding } from '../utils/embedding.js';
+import { requireAuth, optionalAuth } from '../middlewares/clerkAuth.js';
 
 const router = express.Router();
 
-// Configure Cloudinary from env
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Multer memory storage so file is available as buffer
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
+// Multer configuration
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt'];
+const ALLOWED_MIMETYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain'
+];
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-/**
- * uploadBufferToCloudinary
- * - buffer: Buffer
- * - filename: original filename (used for public_id suggestion)
- * - resource_type: 'auto' (supports pdf/raw/etc)
- * Returns the upload result object from Cloudinary
- */
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_FILE_SIZE },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      return cb(new Error(`Invalid file type. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`));
+    }
+    
+    if (!ALLOWED_MIMETYPES.includes(file.mimetype)) {
+      return cb(new Error('Invalid file MIME type'));
+    }
+    
+    cb(null, true);
+  }
+});
+
 function uploadBufferToCloudinary(buffer, filename, resource_type = 'auto') {
   return new Promise((resolve, reject) => {
     const ext = path.extname(filename) || '';
-    // create a safe public_id (strip ext and whitespace)
     const baseName = path.basename(filename, ext).replace(/\s+/g, '_').slice(0, 120);
 
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -42,6 +59,7 @@ function uploadBufferToCloudinary(buffer, filename, resource_type = 'auto') {
         folder: process.env.CLOUDINARY_FOLDER || 'documents',
         public_id: `${baseName}_${Date.now()}`,
         overwrite: false,
+        flags: resource_type === 'raw' || ext === '.pdf' ? 'attachment' : undefined,
       },
       (error, result) => {
         if (error) return reject(error);
@@ -54,79 +72,85 @@ function uploadBufferToCloudinary(buffer, filename, resource_type = 'auto') {
 }
 
 /**
- * POST /api/docs
- * - multipart/form-data with field 'file'
- * - stores document record with cloud metadata
+ * POST /api/docs - Upload (requires authentication)
  */
-router.post('/docs', upload.single('file'), async (req, res) => {
+router.post('/docs', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    const ownerId = req.user?.id || 'test-user'; // temporary
-    if (!req.file) return res.status(400).json({ error: 'FILE_REQUIRED' });
-
-    const { originalname, buffer, mimetype } = req.file;
-    const ext = path.extname(originalname).toLowerCase();
-
-    // 1) Upload to Cloudinary
-    let cloudResult;
-    try {
-      // resource_type 'auto' lets Cloudinary detect raw/pdf etc.
-      cloudResult = await uploadBufferToCloudinary(buffer, originalname, 'auto');
-    } catch (err) {
-      console.error('[docs] cloud upload failed', err);
-      return res.status(500).json({ error: 'CLOUD_UPLOAD_FAILED', detail: err.message || String(err) });
+    const ownerId = req.user.id;
+    
+    console.log('[docs] Upload request from user:', ownerId);
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'FILE_REQUIRED' });
     }
 
-    // 2) Create document record with cloud metadata
+    const { originalname, buffer } = req.file;
+    const ext = path.extname(originalname).toLowerCase();
+
+    console.log(`[docs] Processing: ${originalname} (${(buffer.length / 1024).toFixed(2)} KB)`);
+
+    // Upload to Cloudinary
+    let cloudResult;
+    try {
+      const resourceType = ext === '.pdf' ? 'raw' : 'auto';
+      cloudResult = await uploadBufferToCloudinary(buffer, originalname, resourceType);
+      console.log('[docs] Cloudinary upload successful:', cloudResult.public_id);
+    } catch (err) {
+      console.error('[docs] Cloudinary upload failed:', err);
+      return res.status(500).json({ 
+        error: 'CLOUD_UPLOAD_FAILED', 
+        detail: err.message 
+      });
+    }
+
+    // Create document record
     const newDoc = new Document({
-      file_name: originalname, // keep original filename for readability
+      file_name: originalname,
       original_name: originalname,
       title: req.body.title || originalname,
       owner_id: ownerId,
       visibility: req.body.visibility === 'public' ? 'public' : 'private',
       status: 'pending',
       pages: 0,
-      cloud_url: cloudResult.secure_url || cloudResult.url || '',
-      cloud_public_id: cloudResult.public_id || '',
-      cloud_resource_type: cloudResult.resource_type || 'auto',
+      cloud_url: cloudResult.secure_url || cloudResult.url,
+      cloud_public_id: cloudResult.public_id,
+      cloud_resource_type: cloudResult.resource_type,
     });
 
     await newDoc.save();
+    console.log('[docs] Document created:', newDoc._id);
 
-    // 3) Parse file into pages/chunks
-    // NOTE: parseFileByExtension should accept a Buffer. If it currently expects a file path,
-    // either update it to accept buffers or download from cloudResult.secure_url temporarily.
+    // Parse file
     let pages;
     try {
-      pages = await parseFileByExtension(ext, buffer); // prefer buffer-friendly implementation
-      if (!Array.isArray(pages)) pages = [String(pages || '')];
-    } catch (err) {
-      console.error('[docs] parse error (buffer)', err);
-      // As a fallback, try parsing from the Cloudinary URL if your parser supports URLs
-      try {
-        pages = await parseFileByExtension(ext, cloudResult.secure_url);
-        if (!Array.isArray(pages)) pages = [String(pages || '')];
-      } catch (err2) {
-        console.error('[docs] parse fallback also failed', err2);
-        // Cleanup: consider deleting the cloud asset if parse is critical (optional)
-        return res.status(400).json({ error: 'EXT_NOT_SUPPORTED', detail: err2.message || String(err2) });
+      pages = await parseFileByExtension(ext, buffer);
+      if (!Array.isArray(pages)) {
+        pages = [String(pages || '')];
       }
+      console.log(`[docs] Parsed ${pages.length} chunks`);
+    } catch (err) {
+      console.error('[docs] Parse error:', err);
+      newDoc.status = 'failed';
+      await newDoc.save();
+      return res.status(400).json({ 
+        error: 'PARSE_FAILED', 
+        detail: err.message 
+      });
     }
 
     newDoc.pages = pages.length;
     await newDoc.save();
 
-    // 4) Create DocumentChunk entries — embedding optional (best to enqueue in prod)
-    for (let i = 0; i < pages.length; i++) {
-      const text = pages[i] || '';
-      if (!text.trim()) continue;
+    // Create chunks
+    const chunkPromises = pages.map(async (text, i) => {
+      if (!text.trim()) return null;
 
       let embedding = [];
       try {
         const emb = await getEmbedding(text);
         if (Array.isArray(emb)) embedding = emb;
       } catch (err) {
-        // Log embed failure but don't fail the upload
-        console.warn(`[docs] embedding failed for doc ${newDoc._id} page ${i + 1}:`, err?.message || err);
+        console.warn(`[docs] Embedding failed for page ${i + 1}:`, err?.message);
       }
 
       const chunk = new DocumentChunk({
@@ -136,10 +160,12 @@ router.post('/docs', upload.single('file'), async (req, res) => {
         embedding,
       });
 
-      await chunk.save();
-    }
+      return chunk.save();
+    });
 
-    // 5) Finalize doc status
+    await Promise.all(chunkPromises);
+
+    // Finalize
     newDoc.status = 'indexed';
     await newDoc.save();
 
@@ -149,44 +175,103 @@ router.post('/docs', upload.single('file'), async (req, res) => {
       pagesCount: pages.length,
       cloud_url: newDoc.cloud_url,
       cloud_public_id: newDoc.cloud_public_id,
+      document: newDoc,
     });
   } catch (err) {
-    console.error('[docs] unexpected', err);
-    res.status(500).json({ error: 'UPLOAD_FAILED', detail: err.message || String(err) });
+    console.error('[docs] Unexpected error:', err);
+    res.status(500).json({ 
+      error: 'UPLOAD_FAILED', 
+      detail: err.message 
+    });
   }
 });
 
-// GET /api/docs (list, with pagination)
-router.get('/docs', async (req, res) => {
+// Multer error handler
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ 
+        error: 'FILE_TOO_LARGE', 
+        detail: `Max file size is ${MAX_FILE_SIZE / (1024 * 1024)}MB` 
+      });
+    }
+    return res.status(400).json({ error: err.message });
+  }
+  
+  if (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  
+  next();
+});
+
+/**
+ * GET /api/docs - List documents (optional auth)
+ */
+router.get('/docs', optionalAuth, async (req, res) => {
   try {
     const limit = Math.min(100, parseInt(req.query.limit) || 10);
     const offset = parseInt(req.query.offset) || 0;
+    
     const ownerId = req.user?.id || null;
 
-    const query = ownerId ? { $or: [{ visibility: 'public' }, { owner_id: ownerId }] } : { visibility: 'public' };
-    const total = await Document.countDocuments(query);
-    const items = await Document.find(query).sort({ createdAt: -1 }).skip(offset).limit(limit).lean().exec();
+    let query;
+    if (ownerId) {
+      query = { 
+        $or: [
+          { visibility: 'public' }, 
+          { owner_id: ownerId }
+        ] 
+      };
+      console.log('[docs:list] Authenticated user:', ownerId);
+    } else {
+      query = { visibility: 'public' };
+      console.log('[docs:list] Unauthenticated request');
+    }
 
-    res.json({ limit, offset, total, items });
+    const total = await Document.countDocuments(query);
+    const items = await Document.find(query)
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limit)
+      .lean()
+      .exec();
+
+    console.log(`[docs:list] Returning ${items.length} documents (total: ${total})`);
+
+    res.json({ 
+      limit, 
+      offset, 
+      total,
+      next_offset: offset + items.length < total ? offset + items.length : null,
+      items 
+    });
   } catch (err) {
-    console.error('[docs:list] error', err);
-    res.status(500).json({ error: 'failed' });
+    console.error('[docs:list] Error:', err);
+    res.status(500).json({ error: 'LIST_FAILED', detail: err.message });
   }
 });
 
-// GET /api/docs/:id
-router.get('/docs/:id', async (req, res) => {
+/**
+ * GET /api/docs/:id - Get single document (optional auth)
+ */
+router.get('/docs/:id', optionalAuth, async (req, res) => {
   try {
     const doc = await Document.findById(req.params.id).lean().exec();
-    if (!doc) return res.status(404).json({ error: 'not_found' });
+    if (!doc) {
+      return res.status(404).json({ error: 'NOT_FOUND' });
+    }
 
     const ownerId = req.user?.id || null;
-    if (doc.visibility !== 'public' && doc.owner_id !== ownerId) return res.status(403).json({ error: 'forbidden' });
+    
+    if (doc.visibility !== 'public' && doc.owner_id !== ownerId) {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
 
     res.json(doc);
   } catch (err) {
-    console.error('[docs:get] error', err);
-    res.status(500).json({ error: 'failed' });
+    console.error('[docs:get] Error:', err);
+    res.status(500).json({ error: 'GET_FAILED', detail: err.message });
   }
 });
 

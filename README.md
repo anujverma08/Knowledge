@@ -74,7 +74,7 @@ Rate limit response
 HTTP 429
 { "error": { "code": "RATE_LIMIT" } }
 
-## Test user credentials and seed data
+## Test user credentials
 
 - Test user: `admin@mail.com` / `admin123` (server creates a token on register)
 
@@ -87,7 +87,7 @@ HTTP 429
 - Authentication: JWT bearer tokens returned on register/login. Private docs are only visible to the owner unless a `share-token` is provided.
 - Query caching: identical ask requests for the same user+query must be cached for 60 seconds; responses must include `cached: true` when served from cache.
 
-## Short architecture note (100–200 words)
+## Short architecture note 
 
 The server is a small Express-based API that separates concerns into routes, controllers, and services. Document uploads are persisted to storage (for the hackathon this can be local disk) and are immediately split into chunks for embedding and indexing by the indexing service. The index is kept in-memory or as a lightweight file-backed store for simplicity; rebuilding the index recalculates embeddings and replaces the index snapshot. Authentication is JWT-based with a minimal user store; authorization checks on document access only allow owners or requests with valid share-tokens. A rate-limiter middleware enforces per-user quotas; an idempotency layer records recent Idempotency-Key values to make create operations safe to retry. Queries consult the index, assemble answers with source snippets, and cache responses per user for 60 seconds to reduce cost and improve determinism.
 

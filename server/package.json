@@ -13,7 +13,9 @@
   "description": "",
   "dependencies": {
     "@clerk/clerk-sdk-node": "^4.13.23",
+    "@clerk/express": "^1.7.36",
     "axios": "^1.12.2",
+    "cloudinary": "^2.7.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
@@ -22,6 +24,7 @@
     "multer": "^2.0.2",
     "node-cache": "^5.1.2",
     "pdf-parse": "^2.1.7",
+    "streamifier": "^0.1.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@ import docsRouter from './docs.js';
 import askRouter from './ask.js';
 import adminRouter from './admin.js';
 import { clerkAuthMiddleware } from '../middlewares/clerkAuth.js';
-import { requireRole } from '../middleware/requireRole.js';
+import { requireRole } from '../middlewares/requireRole.js';
 const router = express.Router();
 
 // Mount child routers under root of /api (server will mount this router at /api)

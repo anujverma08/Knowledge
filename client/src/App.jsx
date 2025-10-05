@@ -7,6 +7,7 @@ import {
   SignIn,
   SignUp,
   UserButton,
+  useAuth
 } from "@clerk/clerk-react";
 
 import Home from "./pages/Home";
@@ -37,8 +38,9 @@ function NavigationLink({ to, children }) {
 }
 
 export default function App() {
+  
   return (
-    <ClerkProvider publishableKey={clerkPublishableKey}>
+    <ClerkProvider publishableKey={'pk_test_Y2FyaW5nLWRvbHBoaW4tMjMuY2xlcmsuYWNjb3VudHMuZGV2JA'}>
       <div className="min-h-screen bg-gray-50">
         {/* Header */}
         <header className="bg-white shadow-sm border-b sticky top-0 z-40">

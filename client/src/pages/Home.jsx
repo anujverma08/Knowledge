@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useUser, useClerk } from "@clerk/clerk-react";
-
+import { useUser, useClerk, useAuth } from "@clerk/clerk-react";
+import { useEffect } from "react";
 export default function Home() {
   const { user, isSignedIn, isLoaded } = useUser();
   const { openSignIn } = useClerk();
@@ -23,6 +23,11 @@ export default function Home() {
       openSignIn({ redirectUrl: "/docs" });
     }
   };
+
+  const { getToken } = useAuth();
+  useEffect(() => {
+    getToken().then((token) => console.log(token));
+  },[]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">

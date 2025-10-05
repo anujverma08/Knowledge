@@ -1,8 +1,12 @@
 // server/server.js
+
+import dotenv from 'dotenv';
+dotenv.config(); // MUST run before any clerk import
+
+
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -10,7 +14,7 @@ import apiRouter from './routes/index.js';
 
 import { clerkAuthMiddleware } from './middlewares/clerkAuth.js'; // Import middleware
 
-dotenv.config();
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

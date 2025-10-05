@@ -79,7 +79,7 @@ function AppContent() {
               className="flex items-center space-x-2 text-xl font-bold text-gray-900 hover:text-blue-600 transition-all duration-200 group"
             >
               <span className="text-2xl group-hover:scale-110 transition-transform duration-200">
-                📚
+                
               </span>
               <span className="bg-gradient-to-r from-gray-900 to-blue-600 bg-clip-text text-transparent group-hover:from-blue-600 group-hover:to-blue-700">
                  KnowledgeScout
